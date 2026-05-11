@@ -49,6 +49,113 @@ class ApiController extends Controller
         return response()->json($clients);
     }
 
+    public function getRaffleParticipants(Request $request)
+    {
+        $mode = $request->has('mode') ? $request->mode : 'classic';
+        $minAmount = $request->has('min_amount') ? floatval($request->min_amount) : 0;
+        
+        $query = Client::query();
+        $clients = $query->get();
+        $eligibleClients = [];
+
+        if ($mode === 'loyalty') {
+            // Últimas 5 semanas
+            $last5Weeks = WeekSell::orderBy('id', 'desc')->take(5)->pluck('id')->toArray();
+            // Últimas 2 semanas (están incluidas en las 5, pero tomamos las 2 más recientes)
+            $last2Weeks = WeekSell::orderBy('id', 'desc')->take(2)->pluck('id')->toArray();
+
+            foreach ($clients as $client) {
+                if ($client->phone == '1111' || $client->phone == '2222') continue;
+
+                $purchasesInLast5 = Venta::where('id_client', $client->id)->whereIn('id_week', $last5Weeks)->distinct('id_week')->count('id_week');
+                $purchasesInLast2 = Venta::where('id_client', $client->id)->whereIn('id_week', $last2Weeks)->distinct('id_week')->count('id_week');
+
+                if ($purchasesInLast5 >= 3 && $purchasesInLast2 >= 1) {
+                    $totalSpent = Venta::where('id_client', $client->id)->whereIn('id_week', $last5Weeks)->sum('price');
+                    
+                    if ($totalSpent >= $minAmount) {
+                        $client->total_purchases_count = $purchasesInLast5;
+                        $client->total_amount_spent = $totalSpent;
+                        $eligibleClients[] = $client;
+                    }
+                }
+            }
+
+        } elseif ($mode === 'tickets') {
+            // Semana seleccionada o la actual si no se selecciona nada
+            $hasWeeksFilter = $request->has('weeks') && is_array($request->weeks) && count($request->weeks) > 0;
+            
+            if ($hasWeeksFilter) {
+                $targetWeeks = $request->weeks;
+            } else {
+                $currentWeek = WeekSell::orderBy('id', 'desc')->first();
+                $targetWeeks = $currentWeek ? [$currentWeek->id] : [];
+            }
+
+            if (count($targetWeeks) > 0) {
+                foreach ($clients as $client) {
+                    if ($client->phone == '1111' || $client->phone == '2222') continue;
+
+                    $totalSpent = Venta::where('id_client', $client->id)->whereIn('id_week', $targetWeeks)->sum('price');
+                    $tickets = floor($totalSpent / 1000);
+
+                    if ($tickets >= 1) {
+                        for ($i = 1; $i <= $tickets; $i++) {
+                            // Clonamos el cliente para que tenga un nombre con el número de boleto
+                            $clientClone = clone $client;
+                            $name = $clientClone->name && trim($clientClone->name) !== '' && $clientClone->name !== 'null' ? $clientClone->name : 'N/A';
+                            
+                            if ($tickets > 1) {
+                                $clientClone->name = $name . ' (Boleto ' . $i . ' de ' . $tickets . ')';
+                            } else {
+                                $clientClone->name = $name;
+                            }
+                            
+                            $clientClone->total_purchases_count = Venta::where('id_client', $client->id)->whereIn('id_week', $targetWeeks)->count();
+                            $clientClone->total_amount_spent = $totalSpent;
+                            $eligibleClients[] = $clientClone;
+                        }
+                    }
+                }
+            }
+
+        } else {
+            // MODO CLASSIC
+            $hasWeeksFilter = $request->has('weeks') && is_array($request->weeks) && count($request->weeks) > 0;
+            $minPurchases = $request->has('min_purchases') ? intval($request->min_purchases) : 0;
+
+            foreach ($clients as $client) {
+                if ($client->phone == '1111' || $client->phone == '2222') continue;
+
+                $clientSalesQuery = Venta::where('id_client', $client->id);
+
+                if ($hasWeeksFilter) {
+                    $clientSalesQuery->whereIn('id_week', $request->weeks);
+                }
+
+                $ventas = $clientSalesQuery->get();
+                $purchasesCount = $ventas->count();
+                $totalAmount = $ventas->sum('price');
+
+                if ($hasWeeksFilter && $purchasesCount == 0) {
+                    continue;
+                }
+
+                if (!$hasWeeksFilter && $purchasesCount == 0 && $minPurchases == 0 && $minAmount == 0) {
+                    continue;
+                }
+
+                if ($purchasesCount >= $minPurchases && $totalAmount >= $minAmount) {
+                    $client->total_purchases_count = $purchasesCount;
+                    $client->total_amount_spent = $totalAmount;
+                    $eligibleClients[] = $client;
+                }
+            }
+        }
+
+        return response()->json($eligibleClients);
+    }
+
     //ROUTES for Pays
 
     public function addSell(Request $request)

@@ -11,6 +11,7 @@ Route::get('/user', function (Request $request) {
 //Clients
 Route::get('/getClients', [ApiController::class, 'getClients']);
 Route::post('/addClient', [ApiController::class, 'addClient']);
+Route::post('/getRaffleParticipants', [ApiController::class, 'getRaffleParticipants']);
 
 
 //Sells
